@@ -135,17 +135,22 @@ export async function scrapeExhibitors(url, options = {}) {
     // Handle pagination if needed
     // For SmallWorldLabs, enable pagination by default (can be disabled by setting handlePagination: false)
     // For other types, pagination is opt-in (handlePagination: true)
+    console.log(`Pagination check - pageType: ${pageType}, handlePagination option: ${options.handlePagination}, typeof: ${typeof options.handlePagination}`);
     if (pageType === 'smallworldlabs') {
       if (options.handlePagination !== false) {
         // Auto-enable pagination for SmallWorldLabs unless explicitly disabled
-        console.log('Auto-enabling pagination for SmallWorldLabs - this may take a while...');
+        console.log(`Auto-enabling pagination for SmallWorldLabs - this may take a while... (found ${exhibitors.length} exhibitors on first page)`);
         exhibitors = await handlePagination(page, exhibitors, pageType, url);
+        console.log(`Pagination complete - total exhibitors: ${exhibitors.length}`);
       } else {
-        console.log('Pagination disabled for SmallWorldLabs');
+        console.log('Pagination disabled for SmallWorldLabs (explicitly set to false)');
       }
     } else if (options.handlePagination === true) {
       // For other page types, pagination is opt-in
+      console.log(`Pagination enabled for ${pageType}`);
       exhibitors = await handlePagination(page, exhibitors, pageType, url);
+    } else {
+      console.log(`Pagination skipped for ${pageType} (not SmallWorldLabs and handlePagination !== true)`);
     }
 
     // Send initial exhibitors that already have websites (if streaming)

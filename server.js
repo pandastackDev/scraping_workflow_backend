@@ -123,10 +123,13 @@ app.post('/api/scrape', async (req, res) => {
       console.log(`Starting scrape for: ${url}`);
       console.log(`Options:`, JSON.stringify(options));
       
+      // Set default options
+      // Note: handlePagination is preserved as-is (undefined by default) so scraper.js can auto-enable for SmallWorldLabs
       const scrapeOptions = {
         findWebsites: options.findWebsites !== undefined ? options.findWebsites : false,
         maxWebsiteSearches: options.maxWebsiteSearches || 10,
-        handlePagination: options.handlePagination === true,
+        // Only set handlePagination if explicitly provided, otherwise let scraper.js decide based on page type
+        ...(options.handlePagination !== undefined && { handlePagination: options.handlePagination }),
         ...options
       };
       
