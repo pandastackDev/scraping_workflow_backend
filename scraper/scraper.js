@@ -1121,38 +1121,42 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
         const paginationInfo = await page.evaluate(() => {
           // Look for pagination controls - SmallWorldLabs uses .pagination.paginator-pagination
           const pagination = document.querySelector('.pagination.paginator-pagination, .pagination, [class*="pagination"]');
-          if (!pagination) return { hasNext: false, currentPage: 1, totalPages: 0 };
+          if (!pagination) return { hasNext: false, currentPage: 1, totalPages: 0, nextPageNum: null };
           
           // Find current page - it's a span (not clickable), other pages are <a> tags
-          const currentPageSpan = pagination.querySelector('span.pager-num, span[class*="pager-num"]');
+          const currentPageSpan = pagination.querySelector('span.pager-num, span[class*="pager-num"], span.pager-item');
           let currentPage = 1;
           if (currentPageSpan) {
-            currentPage = parseInt(currentPageSpan.textContent?.trim()) || 1;
+            const pageText = currentPageSpan.textContent?.trim();
+            const pageMatch = pageText.match(/\d+/);
+            if (pageMatch) {
+              currentPage = parseInt(pageMatch[0]) || 1;
+            }
           } else {
             // Fallback: find active page by class
             const activePage = pagination.querySelector('.active, [class*="active"], .current, [class*="current"]');
             if (activePage) {
-              currentPage = parseInt(activePage.textContent?.trim()) || 1;
+              const pageText = activePage.textContent?.trim();
+              const pageMatch = pageText.match(/\d+/);
+              if (pageMatch) {
+                currentPage = parseInt(pageMatch[0]) || 1;
+              }
             }
           }
           
           // Find all page number links (exclude spans which are current page)
-          const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"]'));
+          const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"], a.pager-item'));
           
           // Find next page button - look for .pager-right-next or next page number link
           let nextButton = null;
+          let nextPageNum = currentPage + 1;
           
-          // Strategy 1: Look for explicit "Next Page" button with aria-label
-          const nextPageBtn = pagination.querySelector('a[aria-label*="Next Page" i], a.pager-right-next, a[class*="pager-right-next"]');
-          if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled) {
-            nextButton = nextPageBtn;
-          }
-          
-          // Strategy 2: Look for next page number link (currentPage + 1)
-          if (!nextButton) {
-            const nextPageNum = currentPage + 1;
-            for (const link of pageLinks) {
-              const pageNum = parseInt(link.textContent?.trim());
+          // Strategy 1: Look for next page number link (currentPage + 1) - this is most reliable
+          for (const link of pageLinks) {
+            const pageText = link.textContent?.trim();
+            const pageMatch = pageText.match(/\d+/);
+            if (pageMatch) {
+              const pageNum = parseInt(pageMatch[0]);
               if (pageNum === nextPageNum && link.offsetParent !== null && !link.disabled) {
                 nextButton = link;
                 break;
@@ -1160,24 +1164,39 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
             }
           }
           
-          // Strategy 3: Look for ">" arrow button
+          // Strategy 2: Look for explicit "Next Page" button with aria-label containing "Next Page"
           if (!nextButton) {
-            const arrowBtn = pagination.querySelector('a.pager-right-next, a[aria-label*="next" i]');
-            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled) {
+            const nextPageBtn = pagination.querySelector('a[aria-label*="Next Page" i], a.pager-right-next, a[class*="pager-right-next"]');
+            if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled && 
+                !nextPageBtn.classList.contains('disabled')) {
+              nextButton = nextPageBtn;
+            }
+          }
+          
+          // Strategy 3: Look for ">" arrow button (pager-right-next)
+          if (!nextButton) {
+            const arrowBtn = pagination.querySelector('a.pager-right-next.pager-item');
+            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled &&
+                !arrowBtn.classList.contains('disabled')) {
               nextButton = arrowBtn;
             }
           }
           
           // Calculate total pages from visible page numbers
-          const allPageNumbers = Array.from(pagination.querySelectorAll('.pager-num, [class*="pager-num"]'))
-            .map(el => parseInt(el.textContent?.trim()))
-            .filter(num => !isNaN(num));
+          const allPageNumbers = Array.from(pagination.querySelectorAll('.pager-num, [class*="pager-num"], .pager-item'))
+            .map(el => {
+              const text = el.textContent?.trim();
+              const match = text?.match(/\d+/);
+              return match ? parseInt(match[0]) : null;
+            })
+            .filter(num => num !== null && !isNaN(num));
           const totalPages = allPageNumbers.length > 0 ? Math.max(...allPageNumbers) : 0;
           
           return { 
             hasNext: !!nextButton, 
             currentPage, 
             totalPages,
+            nextPageNum,
             nextButtonText: nextButton ? nextButton.textContent?.trim() : null 
           };
         });
@@ -1187,46 +1206,73 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
           break;
         }
         
-        console.log(`Found pagination, navigating to page ${paginationInfo.currentPage + 1}${paginationInfo.totalPages > 0 ? ` of ${paginationInfo.totalPages}` : ''}...`);
+        console.log(`Found pagination, navigating to page ${paginationInfo.nextPageNum}${paginationInfo.totalPages > 0 ? ` of ${paginationInfo.totalPages}` : ''}...`);
         
         // Try to click next button - use multiple strategies
         try {
-          const clicked = await page.evaluate((currentPage) => {
+          const clicked = await page.evaluate((currentPage, nextPageNum) => {
             const pagination = document.querySelector('.pagination.paginator-pagination, .pagination, [class*="pagination"]');
             if (!pagination) return false;
             
-            const nextPageNum = currentPage + 1;
+            // Strategy 1: Click next page number link (most reliable)
+            const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"], a.pager-item'));
+            for (const link of pageLinks) {
+              const pageText = link.textContent?.trim();
+              const pageMatch = pageText.match(/\d+/);
+              if (pageMatch) {
+                const pageNum = parseInt(pageMatch[0]);
+                if (pageNum === nextPageNum && link.offsetParent !== null && !link.disabled &&
+                    !link.classList.contains('disabled')) {
+                  link.click();
+                  return true;
+                }
+              }
+            }
             
-            // Strategy 1: Click "Next Page" button
+            // Strategy 2: Click "Next Page" button with aria-label
             const nextPageBtn = pagination.querySelector('a[aria-label*="Next Page" i], a.pager-right-next, a[class*="pager-right-next"]');
-            if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled) {
+            if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled &&
+                !nextPageBtn.classList.contains('disabled')) {
               nextPageBtn.click();
               return true;
             }
             
-            // Strategy 2: Click next page number link
-            const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"]'));
-            for (const link of pageLinks) {
-              const pageNum = parseInt(link.textContent?.trim());
-              if (pageNum === nextPageNum && link.offsetParent !== null && !link.disabled) {
-                link.click();
-                return true;
-              }
-            }
-            
-            // Strategy 3: Click ">" arrow
-            const arrowBtn = pagination.querySelector('a.pager-right-next');
-            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled) {
+            // Strategy 3: Click ">" arrow button
+            const arrowBtn = pagination.querySelector('a.pager-right-next.pager-item');
+            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled &&
+                !arrowBtn.classList.contains('disabled')) {
               arrowBtn.click();
               return true;
             }
             
             return false;
-          }, paginationInfo.currentPage);
+          }, paginationInfo.currentPage, paginationInfo.nextPageNum);
           
           if (clicked) {
             // Wait for page to load - SmallWorldLabs uses JavaScript navigation
-            await delay(4000); // Increased wait time for dynamic content
+            await delay(4000); // Wait for JavaScript to execute
+            // Wait for table to reload and content to change
+            try {
+              // Wait for pagination to update (current page should change)
+              await page.waitForFunction(
+                (expectedPage) => {
+                  const pagination = document.querySelector('.pagination.paginator-pagination');
+                  if (!pagination) return false;
+                  const currentPageSpan = pagination.querySelector('span.pager-num, span[class*="pager-num"], span.pager-item');
+                  if (currentPageSpan) {
+                    const pageText = currentPageSpan.textContent?.trim();
+                    const pageMatch = pageText.match(/\d+/);
+                    return pageMatch && parseInt(pageMatch[0]) === expectedPage;
+                  }
+                  return false;
+                },
+                { timeout: 20000 },
+                paginationInfo.nextPageNum
+              );
+            } catch (e) {
+              console.log('Pagination update check timeout, waiting for table...');
+            }
+            
             // Wait for table to reload
             try {
               await page.waitForSelector('table.table tbody tr, .generic-table-wrapper tbody tr', { 
