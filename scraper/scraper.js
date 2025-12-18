@@ -1,11 +1,20 @@
 import puppeteer from 'puppeteer';
-import chromium from '@sparticuz/chromium-min';
+import chromium from '@sparticuz/chromium';
 import { findCompanyWebsite } from './websiteFinder.js';
 
 let browser = null;
 
 // Simple delay helper to replace deprecated page.waitForTimeout
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isServerlessEnv() {
+  // Vercel / common serverless indicators
+  return (
+    process.env.VERCEL === '1' ||
+    !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.SERVERLESS_ENV === '1'
+  );
+}
 
 async function getBrowser() {
   try {
@@ -18,22 +27,36 @@ async function getBrowser() {
         }
       }
 
-      // Use serverless-compatible Chromium when running on Vercel / serverless
-      const executablePath = await chromium.executablePath();
+      if (isServerlessEnv()) {
+        // Vercel / serverless: use Sparticuz Chromium
+        const executablePath = await chromium.executablePath();
 
-      browser = await puppeteer.launch({
-        args: [
-          ...chromium.args,
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu'
-        ],
-        defaultViewport: chromium.defaultViewport,
-        executablePath: executablePath || undefined,
-        headless: chromium.headless
-      });
+        browser = await puppeteer.launch({
+          args: [
+            ...chromium.args,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu'
+          ],
+          defaultViewport: chromium.defaultViewport,
+          executablePath: executablePath || undefined,
+          headless: chromium.headless
+        });
+      } else {
+        // Local/dev: use Puppeteer's bundled Chromium
+        browser = await puppeteer.launch({
+          headless: 'new',
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu'
+          ]
+        });
+      }
       console.log('Browser instance created/recreated');
     }
     return browser;

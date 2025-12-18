@@ -9,7 +9,33 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// CORS configuration to allow frontend on Vercel and local dev
+const allowedOrigins = [
+  'https://scraping-workflow.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser tools / server-side calls with no origin
+      if (!origin) {
+        return callback(null, true);
+      }
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Accept'],
+  })
+);
+
+// Explicit preflight handlers for API routes
+app.options('/api/scrape', cors());
+app.options('/api/export', cors());
 app.use(express.json());
 
 // Health check
