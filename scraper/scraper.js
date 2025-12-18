@@ -1,4 +1,5 @@
 import puppeteer from 'puppeteer';
+import chromium from '@sparticuz/chromium-min';
 import { findCompanyWebsite } from './websiteFinder.js';
 
 let browser = null;
@@ -16,15 +17,22 @@ async function getBrowser() {
           // Ignore close errors
         }
       }
+
+      // Use serverless-compatible Chromium when running on Vercel / serverless
+      const executablePath = await chromium.executablePath();
+
       browser = await puppeteer.launch({
-        headless: 'new',
         args: [
+          ...chromium.args,
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu'
-        ]
+        ],
+        defaultViewport: chromium.defaultViewport,
+        executablePath: executablePath || undefined,
+        headless: chromium.headless
       });
       console.log('Browser instance created/recreated');
     }

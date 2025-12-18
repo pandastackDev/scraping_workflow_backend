@@ -4,10 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
-    "start": "node server.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "start": "node server.js"
   },
   "dependencies": {
+    "@sparticuz/chromium-min": "^143.0.0",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
