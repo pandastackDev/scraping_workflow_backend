@@ -22,12 +22,13 @@ export async function exportToExcel(data, filename = 'exhibitors') {
     { wch: 15 }  // Source
   ];
 
-  // Convert to buffer
-  const buffer = XLSX.write(workbook, { 
-    type: 'buffer', 
-    bookType: 'xlsx' 
+  // Convert workbook to a Node.js Buffer that can be sent as binary
+  // Use 'array' first, then wrap in Buffer to avoid environment quirks
+  const arrayBuffer = XLSX.write(workbook, {
+    bookType: 'xlsx',
+    type: 'array'
   });
 
-  return buffer;
+  return Buffer.from(arrayBuffer);
 }
 
