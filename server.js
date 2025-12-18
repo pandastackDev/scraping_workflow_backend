@@ -7,13 +7,15 @@ import { exportToExcel } from './utils/excelExporter.js';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 
 // CORS configuration to allow frontend on Vercel and local dev
 const allowedOrigins = [
   'https://scraping-workflow.vercel.app',
   'http://localhost:5173',
-  'http://localhost:3000'
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
 ];
 
 app.use(
@@ -23,13 +25,27 @@ app.use(
       if (!origin) {
         return callback(null, true);
       }
+      
+      // In development, allow localhost and 127.0.0.1 variants
+      if (process.env.NODE_ENV !== 'production') {
+        const isLocalhost = origin.startsWith('http://localhost:') || 
+                           origin.startsWith('http://127.0.0.1:');
+        if (isLocalhost) {
+          return callback(null, true);
+        }
+      }
+      
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
+      
+      // Log rejected origins for debugging
+      console.warn(`CORS blocked origin: ${origin}`);
       return callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
+    credentials: true,
   })
 );
 
