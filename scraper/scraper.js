@@ -132,14 +132,19 @@ export async function scrapeExhibitors(url, options = {}) {
         exhibitors = await scrapeGeneric(page);
     }
 
-    // Handle pagination if needed (disabled by default for speed)
-    if (options.handlePagination === true && pageType !== 'smallworldlabs') {
-      exhibitors = await handlePagination(page, exhibitors, pageType, url);
-    }
-    
-    // For SmallWorldLabs, handle pagination separately if explicitly requested
-    if (pageType === 'smallworldlabs' && options.handlePagination === true) {
-      console.log('Pagination requested for SmallWorldLabs - this may take a while...');
+    // Handle pagination if needed
+    // For SmallWorldLabs, enable pagination by default (can be disabled by setting handlePagination: false)
+    // For other types, pagination is opt-in (handlePagination: true)
+    if (pageType === 'smallworldlabs') {
+      if (options.handlePagination !== false) {
+        // Auto-enable pagination for SmallWorldLabs unless explicitly disabled
+        console.log('Auto-enabling pagination for SmallWorldLabs - this may take a while...');
+        exhibitors = await handlePagination(page, exhibitors, pageType, url);
+      } else {
+        console.log('Pagination disabled for SmallWorldLabs');
+      }
+    } else if (options.handlePagination === true) {
+      // For other page types, pagination is opt-in
       exhibitors = await handlePagination(page, exhibitors, pageType, url);
     }
 
@@ -1099,7 +1104,7 @@ async function scrapeGeneric(page) {
 async function handlePagination(page, currentExhibitors, pageType, originalUrl) {
   // Set max pages based on page type
   let maxPages = 5;
-  if (pageType === 'smallworldlabs') maxPages = 15; // Can have 12+ pages
+  if (pageType === 'smallworldlabs') maxPages = 100; // Can have many pages (e.g., Surf Expo has 50+ pages)
   if (pageType === 'manifest') maxPages = 20; // Multiple sections
   
   let pageCount = 0;
@@ -1109,101 +1114,124 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
       // For SmallWorldLabs, check for pagination buttons
       if (pageType === 'smallworldlabs') {
         const paginationInfo = await page.evaluate(() => {
-          // Look for pagination controls - try multiple selectors
-          const pagination = document.querySelector('.pagination, [class*="pagination"], .page-numbers, [class*="page"]');
-          if (!pagination) return { hasNext: false, currentPage: 1 };
+          // Look for pagination controls - SmallWorldLabs uses .pagination.paginator-pagination
+          const pagination = document.querySelector('.pagination.paginator-pagination, .pagination, [class*="pagination"]');
+          if (!pagination) return { hasNext: false, currentPage: 1, totalPages: 0 };
           
-          // Find all page number buttons/links
-          const pageButtons = Array.from(pagination.querySelectorAll('a, button, [class*="page"]'));
-          
-          // Find current active page
-          const activePage = pagination.querySelector('.active, [class*="active"], .current, [class*="current"]');
-          const currentPage = activePage ? parseInt(activePage.textContent) || 1 : 1;
-          
-          // Find next button (could be ">", "Next", or next page number)
-          let nextButton = null;
-          for (const btn of pageButtons) {
-            const text = btn.textContent?.trim() || '';
-            const isNext = text === '>' || 
-                          text === '>>' || 
-                          text.toLowerCase() === 'next' ||
-                          (parseInt(text) === currentPage + 1);
-            
-            if (isNext && 
-                btn.offsetParent !== null && 
-                !btn.disabled && 
-                !btn.classList.contains('disabled') &&
-                !btn.classList.contains('active')) {
-              nextButton = btn;
-              break;
+          // Find current page - it's a span (not clickable), other pages are <a> tags
+          const currentPageSpan = pagination.querySelector('span.pager-num, span[class*="pager-num"]');
+          let currentPage = 1;
+          if (currentPageSpan) {
+            currentPage = parseInt(currentPageSpan.textContent?.trim()) || 1;
+          } else {
+            // Fallback: find active page by class
+            const activePage = pagination.querySelector('.active, [class*="active"], .current, [class*="current"]');
+            if (activePage) {
+              currentPage = parseInt(activePage.textContent?.trim()) || 1;
             }
           }
           
-          // If no explicit next button, try to find next page number
+          // Find all page number links (exclude spans which are current page)
+          const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"]'));
+          
+          // Find next page button - look for .pager-right-next or next page number link
+          let nextButton = null;
+          
+          // Strategy 1: Look for explicit "Next Page" button with aria-label
+          const nextPageBtn = pagination.querySelector('a[aria-label*="Next Page" i], a.pager-right-next, a[class*="pager-right-next"]');
+          if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled) {
+            nextButton = nextPageBtn;
+          }
+          
+          // Strategy 2: Look for next page number link (currentPage + 1)
           if (!nextButton) {
             const nextPageNum = currentPage + 1;
-            for (const btn of pageButtons) {
-              if (parseInt(btn.textContent) === nextPageNum && 
-                  btn.offsetParent !== null) {
-                nextButton = btn;
+            for (const link of pageLinks) {
+              const pageNum = parseInt(link.textContent?.trim());
+              if (pageNum === nextPageNum && link.offsetParent !== null && !link.disabled) {
+                nextButton = link;
                 break;
               }
             }
           }
           
-          return { hasNext: !!nextButton, currentPage, nextButton: nextButton ? nextButton.textContent : null };
+          // Strategy 3: Look for ">" arrow button
+          if (!nextButton) {
+            const arrowBtn = pagination.querySelector('a.pager-right-next, a[aria-label*="next" i]');
+            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled) {
+              nextButton = arrowBtn;
+            }
+          }
+          
+          // Calculate total pages from visible page numbers
+          const allPageNumbers = Array.from(pagination.querySelectorAll('.pager-num, [class*="pager-num"]'))
+            .map(el => parseInt(el.textContent?.trim()))
+            .filter(num => !isNaN(num));
+          const totalPages = allPageNumbers.length > 0 ? Math.max(...allPageNumbers) : 0;
+          
+          return { 
+            hasNext: !!nextButton, 
+            currentPage, 
+            totalPages,
+            nextButtonText: nextButton ? nextButton.textContent?.trim() : null 
+          };
         });
         
         if (!paginationInfo.hasNext) {
-          console.log('No more pages found');
+          console.log(`No more pages found. Scraped up to page ${paginationInfo.currentPage}${paginationInfo.totalPages > 0 ? ` of ${paginationInfo.totalPages}` : ''}`);
           break;
         }
         
-        console.log(`Found pagination, clicking next (page ${paginationInfo.currentPage + 1})...`);
+        console.log(`Found pagination, navigating to page ${paginationInfo.currentPage + 1}${paginationInfo.totalPages > 0 ? ` of ${paginationInfo.totalPages}` : ''}...`);
         
         // Try to click next button - use multiple strategies
         try {
-          // Strategy 1: Click by page number or next arrow
           const clicked = await page.evaluate((currentPage) => {
-            const pagination = document.querySelector('.pagination, [class*="pagination"], .page-numbers');
+            const pagination = document.querySelector('.pagination.paginator-pagination, .pagination, [class*="pagination"]');
             if (!pagination) return false;
             
             const nextPageNum = currentPage + 1;
-            const buttons = Array.from(pagination.querySelectorAll('a, button, [role="button"]'));
             
-            // First try to find next arrow (>, >>, Next)
-            for (const btn of buttons) {
-              const text = (btn.textContent || '').trim();
-              if ((text === '>' || text === '>>' || text.toLowerCase() === 'next') &&
-                  btn.offsetParent !== null && 
-                  !btn.disabled &&
-                  !btn.classList.contains('disabled')) {
-                btn.click();
+            // Strategy 1: Click "Next Page" button
+            const nextPageBtn = pagination.querySelector('a[aria-label*="Next Page" i], a.pager-right-next, a[class*="pager-right-next"]');
+            if (nextPageBtn && nextPageBtn.offsetParent !== null && !nextPageBtn.disabled) {
+              nextPageBtn.click();
+              return true;
+            }
+            
+            // Strategy 2: Click next page number link
+            const pageLinks = Array.from(pagination.querySelectorAll('a.pager-num, a[class*="pager-num"]'));
+            for (const link of pageLinks) {
+              const pageNum = parseInt(link.textContent?.trim());
+              if (pageNum === nextPageNum && link.offsetParent !== null && !link.disabled) {
+                link.click();
                 return true;
               }
             }
             
-            // If no arrow, try to find next page number
-            for (const btn of buttons) {
-              const text = (btn.textContent || '').trim();
-              const pageNum = parseInt(text);
-              if (pageNum === nextPageNum &&
-                  btn.offsetParent !== null && 
-                  !btn.disabled &&
-                  !btn.classList.contains('disabled') &&
-                  !btn.classList.contains('active')) {
-                btn.click();
-                return true;
-              }
+            // Strategy 3: Click ">" arrow
+            const arrowBtn = pagination.querySelector('a.pager-right-next');
+            if (arrowBtn && arrowBtn.offsetParent !== null && !arrowBtn.disabled) {
+              arrowBtn.click();
+              return true;
             }
             
             return false;
           }, paginationInfo.currentPage);
           
           if (clicked) {
-            await delay(3000);
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-            await delay(2000);
+            // Wait for page to load - SmallWorldLabs uses JavaScript navigation
+            await delay(4000); // Increased wait time for dynamic content
+            // Wait for table to reload
+            try {
+              await page.waitForSelector('table.table tbody tr, .generic-table-wrapper tbody tr', { 
+                timeout: 20000,
+                visible: true 
+              });
+            } catch (e) {
+              console.log('Table reload timeout, continuing anyway...');
+            }
+            await delay(2000); // Extra wait for content to stabilize
           } else {
             console.log('Could not find next page button');
             break;
