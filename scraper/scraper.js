@@ -3,6 +3,9 @@ import { findCompanyWebsite } from './websiteFinder.js';
 
 let browser = null;
 
+// Simple delay helper to replace deprecated page.waitForTimeout
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function getBrowser() {
   try {
     if (!browser || !browser.isConnected()) {
@@ -68,7 +71,7 @@ export async function scrapeExhibitors(url, options = {}) {
     }
 
     // Wait a bit for dynamic content
-    await page.waitForTimeout(3000);
+    await delay(3000);
 
     // Detect page type and scrape accordingly
     const pageType = detectPageType(url);
@@ -183,7 +186,7 @@ export async function scrapeExhibitors(url, options = {}) {
               }
               
               // Small delay to avoid rate limiting (reduced for faster real-time updates)
-              await page.waitForTimeout(300);
+              await delay(300);
             } catch (err) {
               console.error(`Error finding website for ${exhibitor.companyName}:`, err.message);
               exhibitor.website = '';
@@ -596,7 +599,7 @@ async function scrapeManifest(page) {
   // Wait for content to load
   try {
     await page.waitForSelector('body', { timeout: 15000 });
-    await page.waitForTimeout(2000); // Extra wait for dynamic content
+    await delay(2000); // Extra wait for dynamic content
   } catch (err) {
     console.log('Page load timeout, continuing anyway...');
   }
@@ -760,7 +763,7 @@ async function scrapeSmallWorldLabs(page) {
     await page.waitForSelector('tbody tr', { timeout: 10000 }).catch(() => {});
   }
   
-  await page.waitForTimeout(1000); // Reduced wait time
+  await delay(1000); // Reduced wait time
   
   // SmallWorldLabs uses a table structure with generic-option-link class
   const exhibitorsData = await page.evaluate(() => {
@@ -1167,9 +1170,9 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
           }, paginationInfo.currentPage);
           
           if (clicked) {
-            await page.waitForTimeout(3000);
+            await delay(3000);
             await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-            await page.waitForTimeout(2000);
+            await delay(2000);
           } else {
             console.log('Could not find next page button');
             break;
@@ -1203,7 +1206,7 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
         
         // Click next button
         await page.click('a[aria-label*="next" i], a[aria-label*="Next" i], .next, [class*="next"], button[aria-label*="next" i]');
-        await page.waitForTimeout(3000);
+        await delay(3000);
         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
       }
 
