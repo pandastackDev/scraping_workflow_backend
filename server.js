@@ -101,7 +101,8 @@ app.post('/api/scrape', async (req, res) => {
       // Set default options
       const scrapeOptions = {
         findWebsites: options.findWebsites !== undefined ? options.findWebsites : false,
-        maxWebsiteSearches: options.maxWebsiteSearches || 10,
+        // Don't set maxWebsiteSearches default - let scraper.js handle it (defaults to all exhibitors)
+        ...(options.maxWebsiteSearches !== undefined && { maxWebsiteSearches: options.maxWebsiteSearches }),
         handlePagination: options.handlePagination === true,
         onProgress: (data) => {
           // Send progress update to client
@@ -143,7 +144,8 @@ app.post('/api/scrape', async (req, res) => {
       // Note: handlePagination is preserved as-is (undefined by default) so scraper.js can auto-enable for SmallWorldLabs
       const scrapeOptions = {
         findWebsites: options.findWebsites !== undefined ? options.findWebsites : false,
-        maxWebsiteSearches: options.maxWebsiteSearches || 10,
+        // Don't set maxWebsiteSearches default - let scraper.js handle it (defaults to all exhibitors)
+        ...(options.maxWebsiteSearches !== undefined && { maxWebsiteSearches: options.maxWebsiteSearches }),
         // Only set handlePagination if explicitly provided, otherwise let scraper.js decide based on page type
         ...(options.handlePagination !== undefined && { handlePagination: options.handlePagination }),
         ...options

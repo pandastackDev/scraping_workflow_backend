@@ -128,6 +128,12 @@ export async function scrapeExhibitors(url, options = {}) {
       case 'goeshow':
         exhibitors = await scrapeGoShow(page);
         break;
+      case 'wpma':
+        exhibitors = await scrapeWPMA(page);
+        break;
+      case 'surfexpo':
+        exhibitors = await scrapeSurfExpo(page);
+        break;
       default:
         exhibitors = await scrapeGeneric(page);
     }
@@ -187,30 +193,35 @@ export async function scrapeExhibitors(url, options = {}) {
       }
       
       if (exhibitorsWithoutWebsite.length > 0) {
-        const maxWebsiteSearches = options.maxWebsiteSearches || Math.min(exhibitorsWithoutWebsite.length, 50); // Limit searches
-        console.log(`Finding websites via Google search for up to ${maxWebsiteSearches} companies (this may take a while)...`);
+        // Use maxWebsiteSearches option if provided, otherwise search for all exhibitors
+        const maxWebsiteSearches = options.maxWebsiteSearches !== undefined 
+          ? options.maxWebsiteSearches 
+          : exhibitorsWithoutWebsite.length; // No limit by default - search for all
+        const actualSearchCount = Math.min(exhibitorsWithoutWebsite.length, maxWebsiteSearches);
+        
+        console.log(`Finding websites via Google search for ${actualSearchCount} companies (this may take a while)...`);
         
         if (options.onProgress) {
           options.onProgress({
-            message: `Finding websites for ${maxWebsiteSearches} companies...`,
+            message: `Finding websites for ${actualSearchCount} companies...`,
             searching: true,
             current: 0,
-            total: maxWebsiteSearches
+            total: actualSearchCount
           });
         }
         
-        for (let i = 0; i < Math.min(exhibitorsWithoutWebsite.length, maxWebsiteSearches); i++) {
+        for (let i = 0; i < actualSearchCount; i++) {
           const exhibitor = exhibitorsWithoutWebsite[i];
           if (!exhibitor.website || exhibitor.website === '') {
             try {
-              console.log(`[${i + 1}/${Math.min(exhibitorsWithoutWebsite.length, maxWebsiteSearches)}] Searching for: ${exhibitor.companyName}`);
+              console.log(`[${i + 1}/${actualSearchCount}] Searching for: ${exhibitor.companyName}`);
               
               // Send progress update
               if (options.onProgress) {
                 options.onProgress({
                   message: `Searching for: ${exhibitor.companyName}`,
                   current: i + 1,
-                  total: maxWebsiteSearches
+                  total: actualSearchCount
                 });
               }
               
@@ -245,8 +256,8 @@ export async function scrapeExhibitors(url, options = {}) {
           }
         }
         
-        if (exhibitorsWithoutWebsite.length > maxWebsiteSearches) {
-          console.log(`Skipped website search for ${exhibitorsWithoutWebsite.length - maxWebsiteSearches} companies to save time`);
+        if (exhibitorsWithoutWebsite.length > actualSearchCount) {
+          console.log(`Skipped website search for ${exhibitorsWithoutWebsite.length - actualSearchCount} companies (limited by maxWebsiteSearches option)`);
         }
       } else {
         console.log('All exhibitors already have websites extracted from the page!');
@@ -285,6 +296,8 @@ function detectPageType(url) {
   if (url.includes('smallworldlabs.com')) return 'smallworldlabs';
   if (url.includes('affiliatesummit.com')) return 'affiliatesummit';
   if (url.includes('goeshow.com')) return 'goeshow';
+  if (url.includes('wpma.com')) return 'wpma';
+  if (url.includes('surfexpo.com')) return 'surfexpo';
   return 'generic';
 }
 
@@ -571,7 +584,87 @@ async function scrapeMapYourShow(page) {
 async function scrapeA2Z(page) {
   const exhibitors = [];
   
-  // A2Z typically uses specific classes
+  console.log('Scraping A2Z page...');
+  
+  // Wait for content to load
+  try {
+    await page.waitForSelector('tbody tr[data-boothid], .exhibitor-name, a[href*="Exhibitor"]', { 
+      timeout: 20000,
+      visible: true 
+    });
+  } catch (err) {
+    console.log('Content not found with standard selector, trying alternative...');
+    await page.waitForSelector('body', { timeout: 10000 }).catch(() => {});
+  }
+  
+  await delay(2000); // Wait for dynamic content to load
+  
+  // First, try to extract from EventMap table structure (if present)
+  const eventMapData = await page.evaluate(() => {
+    const results = [];
+    const seen = new Set();
+    
+    // Check for EventMap table structure
+    const tableRows = document.querySelectorAll('tbody tr[data-boothid]');
+    
+    if (tableRows.length > 0) {
+      console.log(`Found ${tableRows.length} EventMap table rows`);
+      
+      tableRows.forEach(row => {
+        try {
+          // Extract company name from td.companyName a.exhibitorName
+          const companyNameCell = row.querySelector('td.companyName');
+          const companyNameLink = companyNameCell ? companyNameCell.querySelector('a.exhibitorName') : null;
+          const companyName = companyNameLink ? companyNameLink.textContent?.trim() : '';
+          
+          // Extract booth number from td.boothLabel a with data-boothlabels
+          const boothLabelCell = row.querySelector('td.boothLabel');
+          const boothLabelLink = boothLabelCell ? boothLabelCell.querySelector('a.boothLabel') : null;
+          let boothNumber = '';
+          if (boothLabelLink) {
+            boothNumber = boothLabelLink.getAttribute('data-boothlabels') || 
+                         boothLabelLink.textContent?.trim() || '';
+          }
+          
+          // Extract booth ID from row attribute
+          const boothId = row.getAttribute('data-boothid') || '';
+          
+          if (companyName && companyName.length > 1) {
+            const uniqueKey = `${boothId}-${companyName.toLowerCase()}`;
+            if (!seen.has(uniqueKey)) {
+              seen.add(uniqueKey);
+              results.push({
+                companyName,
+                booth: boothNumber,
+                boothId
+              });
+            }
+          }
+        } catch (err) {
+          console.error('Error extracting row data:', err);
+        }
+      });
+    }
+    
+    return results;
+  });
+
+  if (eventMapData.length > 0) {
+    console.log(`Extracted ${eventMapData.length} exhibitors from A2Z EventMap table`);
+    eventMapData.forEach(item => {
+      exhibitors.push({
+        companyName: item.companyName,
+        booth: item.booth || '',
+        website: '', // A2Z EventMap doesn't provide websites in the table
+        source: 'a2z'
+      });
+    });
+    return exhibitors;
+  }
+  
+  // Fallback to original A2Z scraper logic for non-EventMap pages
+  console.log('EventMap table not found, trying alternative A2Z selectors...');
+  
   const selectors = [
     '.exhibitor-name',
     '.exhibitor-link',
@@ -964,6 +1057,312 @@ async function scrapeGoShow(page) {
   return exhibitors;
 }
 
+async function scrapeWPMA(page) {
+  const exhibitors = [];
+  
+  console.log('Scraping WPMA booth map page...');
+  
+  // Wait for booth elements to load
+  try {
+    await page.waitForSelector('#graphic-container div[id^="booth"]', { 
+      timeout: 20000,
+      visible: true 
+    });
+  } catch (err) {
+    console.log('Booth elements not found with standard selector, trying alternative...');
+    await page.waitForSelector('div[id^="booth"]', { timeout: 10000 }).catch(() => {});
+  }
+  
+  await delay(2000); // Wait for dynamic content to load
+  
+  // Extract exhibitor data from booth elements
+  const exhibitorsData = await page.evaluate(() => {
+    const results = [];
+    const seen = new Set();
+    
+    // Find all booth divs
+    const boothElements = document.querySelectorAll('#graphic-container div[id^="booth"], div[id^="booth"]');
+    
+    boothElements.forEach(booth => {
+      try {
+        // Extract booth number from data-bs-title or data-val
+        const boothTitle = booth.getAttribute('data-bs-title') || '';
+        const boothVal = booth.getAttribute('data-val') || '';
+        let boothNumber = '';
+        
+        // Extract booth number from "Booth #M779" format
+        if (boothTitle) {
+          const match = boothTitle.match(/Booth\s*#?M?(\d+)/i);
+          if (match) {
+            boothNumber = match[1];
+          }
+        }
+        
+        // Fallback to data-val if no match
+        if (!boothNumber && boothVal) {
+          boothNumber = boothVal;
+        }
+        
+        // Extract HTML content from data-bs-content
+        const contentHtml = booth.getAttribute('data-bs-content') || '';
+        if (!contentHtml) return;
+        
+        // Decode HTML entities and parse content
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = contentHtml;
+        
+        // Extract company name and location from <strong> tags
+        const allStrongTags = tempDiv.querySelectorAll('strong');
+        let companyName = '';
+        let location = '';
+        
+        // Company name is usually the first strong tag (skip if it's "Company Description:")
+        for (const strongTag of allStrongTags) {
+          const text = strongTag.textContent?.trim() || '';
+          if (text && !text.toLowerCase().includes('company description')) {
+            companyName = text;
+            break;
+          }
+        }
+        
+        // Location is usually the second strong tag
+        if (allStrongTags.length > 1) {
+          location = allStrongTags[1].textContent?.trim() || '';
+        }
+        
+        // Fallback: if no strong tags, try parsing from text lines
+        if (!companyName || !location) {
+          const textContent = tempDiv.textContent || '';
+          const cleanText = textContent.replace(/^This booth is registered to\s*/i, '').trim();
+          const textLines = cleanText.split(/\n|<br\s*\/?>/i).map(line => line.trim()).filter(line => line);
+          
+          if (!companyName && textLines.length > 0) {
+            companyName = textLines[0];
+          }
+          if (!location && textLines.length > 1) {
+            location = textLines[1];
+          }
+        }
+        
+        // Extract company description (text after "Company Description:")
+        let description = '';
+        const fullText = tempDiv.textContent || '';
+        const descriptionMatch = fullText.match(/Company Description:\s*(.+?)(?:\n|$)/is);
+        if (descriptionMatch) {
+          description = descriptionMatch[1].trim();
+          // Clean up description - remove extra whitespace
+          description = description.replace(/\s+/g, ' ').trim();
+        }
+        
+        // Extract business types from class names (bus-type-XX)
+        const businessTypes = [];
+        const classList = booth.classList;
+        classList.forEach(className => {
+          if (className.startsWith('bus-type-')) {
+            const typeId = className.replace('bus-type-', '');
+            businessTypes.push(typeId);
+          }
+        });
+        
+        // Skip if no company name or already seen
+        if (!companyName || companyName.length < 2) return;
+        
+        const uniqueKey = `${boothNumber}-${companyName.toLowerCase()}`;
+        if (seen.has(uniqueKey)) return;
+        seen.add(uniqueKey);
+        
+        // Skip placeholder entries like "Hold", "Beer Garden", "EXHIBITOR SERVICES"
+        const skipNames = ['hold', 'beer garden', 'exhibitor services', 'in our backyard', 'leonard petroleum'];
+        if (skipNames.some(skip => companyName.toLowerCase().includes(skip))) {
+          return;
+        }
+        
+        results.push({
+          boothNumber,
+          companyName,
+          location,
+          description,
+          businessTypes: businessTypes.join(', ')
+        });
+      } catch (err) {
+        console.error('Error extracting booth data:', err);
+      }
+    });
+    
+    return results;
+  });
+
+  console.log(`Extracted ${exhibitorsData.length} exhibitors from WPMA booth map`);
+
+  exhibitorsData.forEach(item => {
+    exhibitors.push({
+      companyName: item.companyName,
+      booth: item.boothNumber ? `M${item.boothNumber}` : '',
+      location: item.location || '',
+      description: item.description || '',
+      businessTypes: item.businessTypes || '',
+      website: '', // WPMA doesn't provide websites in booth map
+      source: 'wpma'
+    });
+  });
+
+  return exhibitors;
+}
+
+async function scrapeSurfExpo(page) {
+  const exhibitors = [];
+  
+  console.log('Scraping Surf Expo exhibitor list page...');
+  
+  // Wait for content to load
+  try {
+    await page.waitForSelector('.et_pb_text_inner h4 strong, h4 strong', { 
+      timeout: 20000,
+      visible: true 
+    });
+  } catch (err) {
+    console.log('Category headers not found, trying alternative selector...');
+    await page.waitForSelector('h4, .et_pb_text', { timeout: 10000 }).catch(() => {});
+  }
+  
+  await delay(2000); // Wait for dynamic content to load
+  
+  // Extract exhibitor data from the page
+  const exhibitorsData = await page.evaluate(() => {
+    const results = [];
+    const seen = new Set();
+    
+    // Find all category sections - look for h4 with strong tags
+    const categoryHeaders = document.querySelectorAll('.et_pb_text_inner h4 strong, h4 strong');
+    
+    categoryHeaders.forEach(header => {
+      try {
+        const categoryName = header.textContent?.trim() || '';
+        if (!categoryName) return;
+        
+        // Find the parent h4 element
+        const h4Element = header.closest('h4') || header.parentElement;
+        if (!h4Element) return;
+        
+        // Find the next sibling paragraph that contains company names
+        let currentElement = h4Element.nextElementSibling;
+        while (currentElement) {
+          // Look for paragraph tags
+          if (currentElement.tagName === 'P') {
+            const paragraph = currentElement;
+            const htmlContent = paragraph.innerHTML || '';
+            
+            // Split by <br> or <br/> tags to get individual company names
+            const companyNames = htmlContent
+              .split(/<br\s*\/?>/i)
+              .map(name => {
+                // Create a temporary div to decode HTML entities
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = name.trim();
+                return tempDiv.textContent || tempDiv.innerText || '';
+              })
+              .map(name => name.trim())
+              .filter(name => {
+                // Filter out empty strings, non-breaking spaces, and invalid entries
+                return name && 
+                       name.length > 1 && 
+                       name.length < 200 &&
+                       name !== '&nbsp;' &&
+                       !name.match(/^\s*$/) &&
+                       !seen.has(`${categoryName}-${name.toLowerCase()}`);
+              });
+            
+            // Add each company name to results
+            companyNames.forEach(companyName => {
+              const uniqueKey = `${categoryName}-${companyName.toLowerCase()}`;
+              seen.add(uniqueKey);
+              results.push({
+                companyName,
+                category: categoryName
+              });
+            });
+            
+            // Break after finding the first paragraph (company list)
+            break;
+          }
+          
+          // If we hit another h4, we've moved to the next category
+          if (currentElement.tagName === 'H4') {
+            break;
+          }
+          
+          currentElement = currentElement.nextElementSibling;
+        }
+      } catch (err) {
+        console.error('Error extracting category data:', err);
+      }
+    });
+    
+    // Alternative method: if no results, try finding all paragraphs with company lists
+    if (results.length === 0) {
+      const allParagraphs = document.querySelectorAll('.et_pb_text_inner p, .et_pb_text p');
+      let currentCategory = '';
+      
+      allParagraphs.forEach(paragraph => {
+        // Check if there's a category header before this paragraph
+        let prevElement = paragraph.previousElementSibling;
+        while (prevElement) {
+          if (prevElement.tagName === 'H4') {
+            const strongTag = prevElement.querySelector('strong');
+            if (strongTag) {
+              currentCategory = strongTag.textContent?.trim() || '';
+            }
+            break;
+          }
+          prevElement = prevElement.previousElementSibling;
+        }
+        
+        const htmlContent = paragraph.innerHTML || '';
+        const companyNames = htmlContent
+          .split(/<br\s*\/?>/i)
+          .map(name => {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = name.trim();
+            return tempDiv.textContent || tempDiv.innerText || '';
+          })
+          .map(name => name.trim())
+          .filter(name => {
+            return name && 
+                   name.length > 1 && 
+                   name.length < 200 &&
+                   name !== '&nbsp;' &&
+                   !name.match(/^\s*$/) &&
+                   !seen.has(`${currentCategory}-${name.toLowerCase()}`);
+          });
+        
+        companyNames.forEach(companyName => {
+          const uniqueKey = `${currentCategory}-${companyName.toLowerCase()}`;
+          seen.add(uniqueKey);
+          results.push({
+            companyName,
+            category: currentCategory || 'Unknown'
+          });
+        });
+      });
+    }
+    
+    return results;
+  });
+
+  console.log(`Extracted ${exhibitorsData.length} exhibitors from Surf Expo`);
+
+  exhibitorsData.forEach(item => {
+    exhibitors.push({
+      companyName: item.companyName,
+      category: item.category || '',
+      website: '', // Surf Expo doesn't provide websites in the list
+      source: 'surfexpo'
+    });
+  });
+
+  return exhibitors;
+}
+
 async function scrapeGeneric(page) {
   const exhibitors = [];
   
@@ -1338,12 +1737,18 @@ async function handlePagination(page, currentExhibitors, pageType, originalUrl) 
         case 'affiliatesummit':
           moreExhibitors = await scrapeAffiliateSummit(page);
           break;
-        case 'goeshow':
-          moreExhibitors = await scrapeGoShow(page);
-          break;
-        default:
-          moreExhibitors = await scrapeGeneric(page);
-      }
+      case 'goeshow':
+        moreExhibitors = await scrapeGoShow(page);
+        break;
+      case 'wpma':
+        moreExhibitors = await scrapeWPMA(page);
+        break;
+      case 'surfexpo':
+        moreExhibitors = await scrapeSurfExpo(page);
+        break;
+      default:
+        moreExhibitors = await scrapeGeneric(page);
+    }
 
       if (moreExhibitors.length === 0) {
         break; // No more data, stop pagination
